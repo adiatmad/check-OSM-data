@@ -59,7 +59,7 @@ with st.spinner("Querying Postpass for overlapping buildings..."):
         st.error(f"Postpass query failed: {ex}")
         st.stop()
 
-    if not data:
+    if len(data) == 0:
         st.warning("No overlapping buildings found in this AOI.")
     else:
         # Convert WKT to GeoDataFrame
