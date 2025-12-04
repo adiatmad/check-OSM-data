@@ -12,17 +12,20 @@ st.title("Overlapping Buildings in BBOX using Postpass")
 
 st.subheader("Enter BBOX coordinates")
 col1, col2 = st.columns(2)
+
 with col1:
 west = st.number_input("West (min longitude)", value=0.0, format="%.6f")
 south = st.number_input("South (min latitude)", value=0.0, format="%.6f")
+
 with col2:
 east = st.number_input("East (max longitude)", value=0.01, format="%.6f")
 north = st.number_input("North (max latitude)", value=0.01, format="%.6f")
 
+# 2️⃣ Query Postpass for overlapping buildings
+
 if st.button("Find Overlapping Buildings"):
 with st.spinner("Querying Postpass for overlapping buildings..."):
 try:
-# SQL query using ST_Overlaps
 sql = f"""
 SELECT a.osm_id AS building_a, b.osm_id AS building_b,
 ST_AsText(ST_Intersection(a.geom, b.geom)) AS geom_wkt
