@@ -4,7 +4,6 @@ import geopandas as gpd
 import folium
 from streamlit_folium import st_folium
 from shapely import wkt
-import json
 
 st.set_page_config(page_title="HOT AOI Building Overlap Detector")
 st.title("HOT AOI Overlapping Buildings")
@@ -14,8 +13,8 @@ st.title("HOT AOI Overlapping Buildings")
 task_id = st.text_input("Enter HOT Tasking Manager Task ID:")
 
 if st.button("Run Query") and task_id:
+# Fetch task details from HOT
 with st.spinner("Fetching task details from HOT..."):
-# Fetch task geometry from HOT TM API
 try:
 hot_url = f"[https://tasks.hotosm.org/api/v2.0/tasks/{task_id}](https://tasks.hotosm.org/api/v2.0/tasks/{task_id})"
 r = requests.get(hot_url, timeout=30)
@@ -23,8 +22,7 @@ r.raise_for_status()
 task_json = r.json()
 
 ```
-        # Extract bounding box from task geometry
-        # Some tasks may have 'bbox', fallback to polygon bounds
+        # Extract bounding box
         if "bbox" in task_json:
             w, s, e, n = task_json["bbox"]
         else:
@@ -34,11 +32,13 @@ task_json = r.json()
     except Exception as ex:
         st.error(f"Failed to fetch task or parse geometry: {ex}")
         st.stop()
-    
+
+# Query Postpass for overlapping buildings
 with st.spinner("Querying Postpass for overlapping buildings..."):
     try:
         sql = f"""
-        SELECT a.osm_id AS building_a, b.osm_id AS building_b, ST_AsText(ST_Intersection(a.geom, b.geom)) AS geom_wkt
+        SELECT a.osm_id AS building_a, b.osm_id AS building_b, 
+               ST_AsText(ST_Intersection(a.geom, b.geom)) AS geom_wkt
         FROM postpass_polygon AS a
         JOIN postpass_polygon AS b
           ON a.osm_id < b.osm_id
@@ -58,7 +58,7 @@ with st.spinner("Querying Postpass for overlapping buildings..."):
     except Exception as ex:
         st.error(f"Postpass query failed: {ex}")
         st.stop()
-    
+
     if len(data) == 0:
         st.warning("No overlapping buildings found in this AOI.")
     else:
@@ -67,14 +67,14 @@ with st.spinner("Querying Postpass for overlapping buildings..."):
             data, 
             geometry=gpd.GeoSeries.from_wkt([f["geom_wkt"] for f in data])
         )
-        
-        # 2️⃣ Map preview
+
+        # Map preview
         m = folium.Map(location=[(s+n)/2, (w+e)/2], zoom_start=16)
         folium.GeoJson(gdf).add_to(m)
         st.subheader("Map Preview")
         st_folium(m, width=700, height=500)
-        
-        # 3️⃣ Download button
+
+        # Download button
         geojson_str = gdf.to_json()
         st.download_button(
             label="Download GeoJSON",
