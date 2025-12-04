@@ -8,16 +8,11 @@ from shapely import wkt
 st.set_page_config(page_title="Overlapping Buildings Detector")
 st.title("Overlapping Buildings in BBOX using Postpass")
 
-# 1️⃣ User input for bounding box coordinates
+# 1️⃣ User input for bounding box coordinates (single column)
 
 st.subheader("Enter BBOX coordinates")
-col1, col2 = st.columns(2)
-
-with col1:
 west = st.number_input("West (min longitude)", value=0.0, format="%.6f")
 south = st.number_input("South (min latitude)", value=0.0, format="%.6f")
-
-with col2:
 east = st.number_input("East (max longitude)", value=0.01, format="%.6f")
 north = st.number_input("North (max latitude)", value=0.01, format="%.6f")
 
