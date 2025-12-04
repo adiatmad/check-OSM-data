@@ -19,7 +19,7 @@ north = st.number_input("North (max latitude)", value=0.01, format="%.6f")
 # Query button
 
 if st.button("Find Overlapping Buildings"):
-# ✅ Ensure at least one indented line here
+# everything inside this block must be 4 spaces indented
 with st.spinner("Querying Postpass for overlapping buildings..."):
 try:
 sql = f"""
