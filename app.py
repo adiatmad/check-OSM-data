@@ -9,7 +9,6 @@ st.set_page_config(page_title="Overlapping Buildings Detector")
 st.title("Overlapping Buildings in BBOX using Postpass")
 
 # BBOX input
-
 st.subheader("Enter BBOX coordinates")
 west = st.number_input("West (min longitude)", value=0.0, format="%.6f")
 south = st.number_input("South (min latitude)", value=0.0, format="%.6f")
@@ -17,35 +16,33 @@ east = st.number_input("East (max longitude)", value=0.01, format="%.6f")
 north = st.number_input("North (max latitude)", value=0.01, format="%.6f")
 
 # Query button
-
 if st.button("Find Overlapping Buildings"):
-# everything inside this block must be 4 spaces indented
-with st.spinner("Querying Postpass for overlapping buildings..."):
-try:
-sql = f"""
-SELECT a.osm_id AS building_a, b.osm_id AS building_b,
-ST_AsText(ST_Intersection(a.geom, b.geom)) AS geom_wkt
-FROM postpass_polygon AS a
-JOIN postpass_polygon AS b
-ON a.osm_id < b.osm_id
-AND a.tags ? 'building'
-AND b.tags ? 'building'
-AND a.geom && b.geom
-AND ST_Overlaps(a.geom, b.geom)
-WHERE a.geom && ST_MakeEnvelope({west},{south},{east},{north},4326)
-"""
-response = requests.post(
-"[https://postpass.geofabrik.de/api/0.2/interpreter](https://postpass.geofabrik.de/api/0.2/interpreter)",
-data={"data": sql, "options[geojson]": "false"},
-timeout=120
-)
-response.raise_for_status()
-data = response.json()
-except Exception as ex:
-st.error(f"Postpass query failed: {ex}")
-st.stop()
+    # everything inside this block must be 4 spaces indented
+    with st.spinner("Querying Postpass for overlapping buildings..."):
+        try:
+            sql = f"""
+            SELECT a.osm_id AS building_a, b.osm_id AS building_b,
+            ST_AsText(ST_Intersection(a.geom, b.geom)) AS geom_wkt
+            FROM postpass_polygon AS a
+            JOIN postpass_polygon AS b
+            ON a.osm_id < b.osm_id
+            AND a.tags ? 'building'
+            AND b.tags ? 'building'
+            AND a.geom && b.geom
+            AND ST_Overlaps(a.geom, b.geom)
+            WHERE a.geom && ST_MakeEnvelope({west},{south},{east},{north},4326)
+            """
+            response = requests.post(
+                "https://postpass.geofabrik.de/api/0.2/interpreter",
+                data={"data": sql, "options[geojson]": "false"},
+                timeout=120
+            )
+            response.raise_for_status()
+            data = response.json()
+        except Exception as ex:
+            st.error(f"Postpass query failed: {ex}")
+            st.stop()
 
-```
     if not data:
         st.warning("No overlapping buildings found in this BBOX.")
     else:
@@ -65,4 +62,3 @@ st.stop()
             file_name=f"overlapping_buildings_{west}_{south}_{east}_{north}.geojson",
             mime="application/geo+json"
         )
-```
