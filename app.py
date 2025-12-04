@@ -4,6 +4,8 @@ import geopandas as gpd
 import folium
 from streamlit_folium import st_folium
 import json
+import csv
+from io import StringIO
 
 st.set_page_config(page_title="Overlapping Buildings Detector")
 st.title("Overlapping Buildings in BBOX using Postpass")
@@ -47,163 +49,228 @@ if st.button("Find Overlapping Buildings") and bbox_input:
     
     with st.spinner("Querying Postpass for overlapping buildings..."):
         try:
-            # Proper Overpass/Postpass query format
-            # First, let's test with a simpler query to check if Postpass works
-            # We'll get buildings first, then find overlaps
+            # Based on the Postpass examples, we need to use this format
+            # First, let's try a simple test query to get buildings
             
-            # Query 1: Get all buildings in the bbox
-            query = f"""
-            [out:json][timeout:90];
-            (
-              way["building"]({south},{west},{north},{east});
-              relation["building"]({south},{west},{north},{east});
-            );
-            out body;
-            >;
-            out skel qt;
-            """
+            # Simple query to count buildings
+            test_query = f"""SELECT 
+                COUNT(*) as building_count 
+                FROM postpass_polygon 
+                WHERE tags ? 'building'
+                AND geom && ST_MakeEnvelope({west}, {south}, {east}, {north}, 4326)"""
             
-            st.info(f"Querying BBOX: {south},{west},{north},{east}")
+            # Format as shown in examples
+            formatted_query = f"""{{{{data:sql,server=https://postpass.geofabrik.de/api/0.2/,geojson=false}}}}
+{test_query}"""
             
+            st.write("Sending query to Postpass...")
+            
+            # Make the request - the examples show using GET with the query as a parameter
+            # But let's try POST first as that's what we were doing
             response = requests.post(
                 "https://postpass.geofabrik.de/api/0.2/interpreter",
-                data={"data": query},
+                data={"data": test_query},
                 timeout=120
             )
             
-            # Check response
             st.write(f"Response status: {response.status_code}")
+            st.write(f"Response headers: {dict(response.headers)}")
             
-            if response.status_code != 200:
-                st.error(f"API Error {response.status_code}: {response.text[:200]}")
-                st.stop()
+            if response.status_code == 200:
+                # Try to parse the response
+                content = response.text.strip()
                 
-            response.raise_for_status()
+                # Check if it's JSON or CSV
+                if content.startswith('[') or content.startswith('{'):
+                    # JSON response
+                    try:
+                        data = json.loads(content)
+                        st.write(f"JSON response: {data}")
+                    except:
+                        st.write(f"Could not parse as JSON: {content[:200]}")
+                else:
+                    # Probably CSV
+                    try:
+                        csv_reader = csv.reader(StringIO(content))
+                        rows = list(csv_reader)
+                        st.write(f"CSV response with {len(rows)} rows")
+                        if rows:
+                            st.write("First few rows:")
+                            for i, row in enumerate(rows[:5]):
+                                st.write(f"Row {i}: {row}")
+                    except:
+                        st.write(f"Raw response: {content[:500]}")
             
-            # Parse the response
-            result = response.json()
+            # Now try the overlap query
+            st.write("\n---\nTrying overlap detection query...")
             
-            st.write(f"Found {len(result.get('elements', []))} building elements")
+            # Overlap query based on Postpass SQL examples
+            overlap_query = f"""SELECT 
+                a.osm_id as building_a,
+                b.osm_id as building_b,
+                ST_Area(ST_Intersection(a.geom, b.geom)::geography) as overlap_area_m2,
+                ST_AsText(ST_Intersection(a.geom, b.geom)) as overlap_geom
+                FROM postpass_polygon a
+                JOIN postpass_polygon b 
+                ON a.osm_id < b.osm_id 
+                AND ST_Intersects(a.geom, b.geom)
+                AND a.geom && b.geom
+                WHERE a.tags ? 'building' 
+                AND b.tags ? 'building'
+                AND a.geom && ST_MakeEnvelope({west}, {south}, {east}, {north}, 4326)
+                AND b.geom && ST_MakeEnvelope({west}, {south}, {east}, {north}, 4326)
+                AND ST_Area(ST_Intersection(a.geom, b.geom)::geography) > 0.1
+                LIMIT 100"""
             
-            # Debug: Show first few elements
-            if result.get('elements'):
-                st.write("First element sample:")
-                st.json(result['elements'][0])
+            st.code(overlap_query, language='sql')
             
+            response2 = requests.post(
+                "https://postpass.geofabrik.de/api/0.2/interpreter",
+                data={"data": overlap_query},
+                timeout=120
+            )
+            
+            st.write(f"Overlap query status: {response2.status_code}")
+            
+            if response2.status_code == 200:
+                content2 = response2.text.strip()
+                
+                if content2:
+                    # Try to parse as CSV
+                    try:
+                        csv_reader = csv.reader(StringIO(content2))
+                        overlap_rows = list(csv_reader)
+                        
+                        if overlap_rows:
+                            st.success(f"Found {len(overlap_rows)-1 if len(overlap_rows) > 1 else 0} overlapping building pairs")
+                            
+                            # Display as table
+                            headers = overlap_rows[0] if len(overlap_rows) > 0 else ['building_a', 'building_b', 'overlap_area_m2', 'overlap_geom']
+                            data_rows = overlap_rows[1:] if len(overlap_rows) > 1 else []
+                            
+                            if data_rows:
+                                st.subheader("Overlapping Building Pairs")
+                                
+                                # Create a DataFrame for display
+                                import pandas as pd
+                                df = pd.DataFrame(data_rows, columns=headers)
+                                st.dataframe(df)
+                                
+                                # Try to create a map if we have geometries
+                                if 'overlap_geom' in headers:
+                                    try:
+                                        # Parse WKT geometries
+                                        from shapely import wkt
+                                        import geopandas as gpd
+                                        
+                                        geometries = []
+                                        valid_rows = []
+                                        
+                                        for i, row in enumerate(data_rows):
+                                            try:
+                                                geom_wkt = row[headers.index('overlap_geom')]
+                                                if geom_wkt and geom_wkt.lower() != 'null':
+                                                    geom = wkt.loads(geom_wkt)
+                                                    geometries.append(geom)
+                                                    
+                                                    # Create a dict for this row
+                                                    row_dict = {}
+                                                    for j, header in enumerate(headers):
+                                                        if header != 'overlap_geom' and j < len(row):
+                                                            row_dict[header] = row[j]
+                                                    valid_rows.append(row_dict)
+                                            except Exception as e:
+                                                st.write(f"Could not parse geometry for row {i}: {e}")
+                                        
+                                        if geometries and valid_rows:
+                                            # Create GeoDataFrame
+                                            gdf = gpd.GeoDataFrame(
+                                                valid_rows,
+                                                geometry=geometries,
+                                                crs="EPSG:4326"
+                                            )
+                                            
+                                            # Create map
+                                            center_lat = (south + north) / 2
+                                            center_lon = (west + east) / 2
+                                            
+                                            m = folium.Map(location=[center_lat, center_lon], zoom_start=16)
+                                            
+                                            # Add bounding box
+                                            folium.Rectangle(
+                                                bounds=[[south, west], [north, east]],
+                                                color='blue',
+                                                fill=False,
+                                                weight=2,
+                                                opacity=0.5,
+                                                tooltip="Search BBOX"
+                                            ).add_to(m)
+                                            
+                                            # Add overlapping areas
+                                            folium.GeoJson(
+                                                gdf,
+                                                name="Overlapping Areas",
+                                                tooltip=folium.GeoJsonTooltip(
+                                                    fields=['building_a', 'building_b', 'overlap_area_m2'],
+                                                    aliases=['Building A:', 'Building B:', 'Overlap Area (m²):']
+                                                ),
+                                                style_function=lambda x: {
+                                                    'fillColor': 'red',
+                                                    'color': 'red',
+                                                    'weight': 2,
+                                                    'fillOpacity': 0.5
+                                                }
+                                            ).add_to(m)
+                                            
+                                            folium.LayerControl().add_to(m)
+                                            
+                                            # Display map
+                                            st.subheader("Map of Overlapping Areas")
+                                            st_folium(m, width=700, height=500)
+                                            
+                                            # Download button
+                                            geojson_str = gdf.to_json()
+                                            st.download_button(
+                                                label="Download Overlaps as GeoJSON",
+                                                data=geojson_str,
+                                                file_name=f"overlapping_buildings_{west}_{south}_{east}_{north}.geojson",
+                                                mime="application/geo+json"
+                                            )
+                                    except Exception as e:
+                                        st.warning(f"Could not create map: {e}")
+                                        st.write(f"Error details: {str(e)}")
+                        else:
+                            st.warning("No overlapping buildings found in this area.")
+                    except Exception as e:
+                        st.write(f"Could not parse response as CSV: {e}")
+                        st.write(f"Raw response: {content2[:500]}")
+                else:
+                    st.warning("Empty response - no overlapping buildings found.")
+            else:
+                st.error(f"Overlap query failed: {response2.status_code}")
+                st.write(f"Error: {response2.text[:500]}")
+                
         except requests.exceptions.RequestException as e:
             st.error(f"Network error: {e}")
-            if hasattr(e.response, 'text'):
+            if hasattr(e, 'response') and e.response:
                 st.write(f"Error details: {e.response.text[:500]}")
-            st.stop()
-        except ValueError as e:
-            st.error(f"Invalid JSON response: {e}")
-            if 'response' in locals():
-                st.write(f"Raw response: {response.text[:500]}")
-            st.stop()
         except Exception as ex:
-            st.error(f"Postpass query failed: {ex}")
-            import traceback
-            st.write(traceback.format_exc())
-            st.stop()
-    
-    # Process buildings and find overlaps (simplified approach)
-    if not result.get('elements'):
-        st.warning("No buildings found in this BBOX.")
-        st.info(f"BBOX used: south={south}, west={west}, north={north}, east={east}")
-    else:
-        try:
-            # For now, let's just display the buildings on a map
-            # In a real implementation, we would need to:
-            # 1. Parse building geometries from OSM elements
-            # 2. Use a spatial library to find overlaps
-            
-            st.warning("Note: Full overlap detection requires complex geometry processing.")
-            st.info(f"Found {len(result['elements'])} building elements. Displaying on map...")
-            
-            # Create a simple map with building markers
-            center_lat = (south + north) / 2
-            center_lon = (west + east) / 2
-            
-            m = folium.Map(location=[center_lat, center_lon], zoom_start=16)
-            
-            # Add bounding box
-            folium.Rectangle(
-                bounds=[[south, west], [north, east]],
-                color='blue',
-                fill=False,
-                weight=2,
-                opacity=0.5,
-                tooltip="Search BBOX"
-            ).add_to(m)
-            
-            # Add building markers (simplified - using node positions)
-            building_count = 0
-            for element in result['elements']:
-                if element.get('type') == 'node':
-                    lat = element.get('lat')
-                    lon = element.get('lon')
-                    if lat and lon:
-                        folium.CircleMarker(
-                            location=[lat, lon],
-                            radius=3,
-                            color='red',
-                            fill=True,
-                            fill_color='red',
-                            tooltip=f"Building Node: {element.get('id')}"
-                        ).add_to(m)
-                        building_count += 1
-                elif element.get('type') == 'way' and element.get('center'):
-                    # Some ways have center coordinates
-                    lat = element.get('center', {}).get('lat')
-                    lon = element.get('center', {}).get('lon')
-                    if lat and lon:
-                        folium.CircleMarker(
-                            location=[lat, lon],
-                            radius=5,
-                            color='green',
-                            fill=True,
-                            fill_color='green',
-                            tooltip=f"Building Way: {element.get('id')}"
-                        ).add_to(m)
-                        building_count += 1
-            
-            # Display map
-            st.subheader(f"Found {building_count} building locations")
-            st_folium(m, width=700, height=500)
-            
-            # Show data table
-            st.subheader("Building Elements (sample)")
-            display_data = []
-            for element in result['elements'][:20]:  # Show first 20
-                display_data.append({
-                    'id': element.get('id'),
-                    'type': element.get('type'),
-                    'tags': str(element.get('tags', {}))
-                })
-            
-            if display_data:
-                st.dataframe(display_data)
-            
-        except Exception as e:
-            st.error(f"Error processing data: {e}")
+            st.error(f"Query failed: {ex}")
             import traceback
             st.write(traceback.format_exc())
 
-# Alternative approach using a simpler query
-with st.expander("Alternative: Direct overlap query (may not work on Postpass)"):
-    st.write("""
-    **Note:** Postpass may not support complex spatial queries like ST_Overlaps.
-    For full overlap detection, you would need to:
-    
-    1. Download all buildings in the area
-    2. Use local Python libraries (shapely, geopandas) to find overlaps
-    3. Process the overlaps locally
-    
-    This requires more advanced processing but gives more accurate results.
-    """)
-    
-    if st.button("Try alternative approach (local processing)"):
-        st.info("This would require downloading full building geometries and processing locally.")
+# Alternative: Try GET request approach
+with st.expander("Try alternative GET request method"):
+    if st.button("Test GET request method"):
+        # Try the format from the examples
+        test_get_query = f"""SELECT COUNT(*) as count FROM postpass_polygon WHERE tags ? 'building' LIMIT 5"""
+        encoded_query = requests.utils.quote(test_get_query)
+        
+        # Try the format shown in examples: {{data:sql,server=...,geojson=false}}
+        example_format = f"{{{{data:sql,server=https://postpass.geofabrik.de/api/0.2/,geojson=false}}}}"
+        
+        st.write(f"Example format from docs: {example_format}")
+        st.write("This format is likely for overpass-turbo, not for direct API calls")
 
 with st.expander("How to use"):
     st.write("""
@@ -214,12 +281,13 @@ with st.expander("How to use"):
     
     2. Click "Find Overlapping Buildings"
     
-    3. The map will show:
-       - Blue rectangle: Your search area
-       - Red/green dots: Building locations
+    3. The app will:
+       - Query Postpass for buildings in the area
+       - Find overlapping building pairs
+       - Display results in a table
+       - Show overlapping areas on a map (if geometries are available)
+       - Allow download as GeoJSON
     
-    **Limitations:**
-    - This shows building locations but not actual polygon overlaps
-    - For full overlap detection, local processing is needed
-    - Large areas may timeout
+    **Note:** The query uses `ST_Area(ST_Intersection(...)::geography)` to calculate overlap area in square meters.
+    Only overlaps larger than 0.1 m² are returned to filter tiny overlaps.
     """)
