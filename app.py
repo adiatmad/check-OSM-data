@@ -8,7 +8,7 @@ from shapely import wkt
 st.set_page_config(page_title="Overlapping Buildings Detector")
 st.title("Overlapping Buildings in BBOX using Postpass")
 
-# BBOX input (single column, safe indentation)
+# BBOX input
 
 st.subheader("Enter BBOX coordinates")
 west = st.number_input("West (min longitude)", value=0.0, format="%.6f")
@@ -19,15 +19,10 @@ north = st.number_input("North (max latitude)", value=0.01, format="%.6f")
 # Query button
 
 if st.button("Find Overlapping Buildings"):
-st.write("Running query...")  # placeholder to avoid empty block
-
-```
-# Spinner block
+# ✅ Ensure at least one indented line here
 with st.spinner("Querying Postpass for overlapping buildings..."):
-    try:
-        sql = f"""
-```
-
+try:
+sql = f"""
 SELECT a.osm_id AS building_a, b.osm_id AS building_b,
 ST_AsText(ST_Intersection(a.geom, b.geom)) AS geom_wkt
 FROM postpass_polygon AS a
