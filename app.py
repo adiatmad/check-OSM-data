@@ -36,18 +36,18 @@ task_json = r.json()
         st.stop()
     
 with st.spinner("Querying Postpass for overlapping buildings..."):
-    sql = f"""
-    SELECT a.osm_id AS building_a, b.osm_id AS building_b, ST_AsText(ST_Intersection(a.geom, b.geom)) AS geom_wkt
-    FROM postpass_polygon AS a
-    JOIN postpass_polygon AS b
-      ON a.osm_id < b.osm_id
-     AND a.tags ? 'building'
-     AND b.tags ? 'building'
-     AND a.geom && b.geom
-     AND ST_Overlaps(a.geom, b.geom)
-    WHERE a.geom && ST_MakeEnvelope({w},{s},{e},{n},4326)
-    """
     try:
+        sql = f"""
+        SELECT a.osm_id AS building_a, b.osm_id AS building_b, ST_AsText(ST_Intersection(a.geom, b.geom)) AS geom_wkt
+        FROM postpass_polygon AS a
+        JOIN postpass_polygon AS b
+          ON a.osm_id < b.osm_id
+         AND a.tags ? 'building'
+         AND b.tags ? 'building'
+         AND a.geom && b.geom
+         AND ST_Overlaps(a.geom, b.geom)
+        WHERE a.geom && ST_MakeEnvelope({w},{s},{e},{n},4326)
+        """
         response = requests.post(
             "https://postpass.geofabrik.de/api/0.2/interpreter",
             data={"data": sql, "options[geojson]": "false"},
@@ -63,7 +63,10 @@ with st.spinner("Querying Postpass for overlapping buildings..."):
         st.warning("No overlapping buildings found in this AOI.")
     else:
         # Convert WKT to GeoDataFrame
-        gdf = gpd.GeoDataFrame(data, geometry=gpd.GeoSeries.from_wkt([f["geom_wkt"] for f in data]))
+        gdf = gpd.GeoDataFrame(
+            data, 
+            geometry=gpd.GeoSeries.from_wkt([f["geom_wkt"] for f in data])
+        )
         
         # 2️⃣ Map preview
         m = folium.Map(location=[(s+n)/2, (w+e)/2], zoom_start=16)
